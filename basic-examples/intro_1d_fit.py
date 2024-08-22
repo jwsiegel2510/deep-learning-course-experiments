@@ -49,6 +49,7 @@ init_scale = 1/jnp.sqrt(width) # For ReLU activation
 params = init_deep_network_params(width, depth, init_scale, random.PRNGKey(0))
 
 # Plot the function at initialization
+print("Neural Network function at initialization")
 num_pts = 100
 vals = jnp.linspace(-1,1,num_pts)
 outs = batched_predict(params, vals).reshape([num_pts])
@@ -85,7 +86,7 @@ step_size = 0.1
 for epoch in range(num_steps):
     params = update(params, vals, outs, step_size)
 
-# print(params)
+print("Network function after gradient descent training")
 plt.plot(vals, outs)
 outs = batched_predict(params, vals).reshape([num_pts])
 plt.plot(vals, outs)
