@@ -95,26 +95,21 @@ def generate_small_block_parameters(n, d, k, key):
 # n1: number of inner residual channels
 # d1: inner residual depth
 # k1: kernel size
-# l1: number of large scale blocks
 # n2: number of small scale channels
 # d2: small scale depth
 # k2: small scale kernel size
-# l2: number of small scale blocks
-def generate_parameters(m, n1, d1, k1, l1, n2, d2, k2, l2, key):
+# l: number of blocks
+def generate_parameters(m, n1, d1, k1, n2, d2, k2, l, key):
   lsc_key, ssc_key = random.split(key)
-  keys = random.split(lsc_key, l1)
-  large_scale_params = []
-  for i in range(l1):
-    block_key, scale_key = random.split(keys[i], 2)
+  keys = random.split(lsc_key, l)
+  params = []
+  for i in range(l):
+    small_block_key, block_key, scale_key = random.split(keys[i], 3)
     block_params = generate_block_parameters(m, n1, d1, k1, block_key)
     permutation = jnp.array([2*j + (i%2) for j in range(m)] + [2*j + (i+1)%2 for j in range(m)])
-    large_scale_params.append([block_params, permutation])
-  keys = random.split(ssc_key, l2)
-  small_scale_params = []
-  for i in range(l2):
-    block_params = generate_small_block_parameters(n2, d2, k2, keys[i])
-    small_scale_params.append(block_params)
-  return [large_scale_params, small_scale_params]
+    small_block_params = generate_small_block_parameters(n2,d2,k2,small_block_key)
+    params.append([block_params, permutation, small_block_params])
+  return params
 
 # Activation functions
 def sigmoid(x):
@@ -225,16 +220,18 @@ step = 1.0
 # Applies the full network forward pass.
 #@jit
 def apply_forward(input, parameters):
-  for block_params, permutation in parameters[0]:
+  parity = 0
+  for block_params, permutation, small_block_params in parameters:
     m = len(permutation)
     input = apply_block_forward(input, block_params, permutation[:m//2], permutation[m//2:], step)
-  output = jnp.zeros((input.shape[0], 1, sqrtchannels * input.shape[2], sqrtchannels * input.shape[3]))
-  for i in range(channel_size):
-    output = output.at[:,0,(i%sqrtchannels) * input.shape[2]:(i%sqrtchannels + 1) * input.shape[2],(i//sqrtchannels) * input.shape[3]:(i//sqrtchannels + 1) * input.shape[3]].set(input[:,i,:,:])
-  parity = 0
-  for block_params in parameters[1]:
-    output = apply_forward_small_scale(output, block_params, parity, step)
+    output = jnp.zeros((input.shape[0], 1, sqrtchannels * input.shape[2], sqrtchannels * input.shape[3]))
+    for i in range(channel_size):
+      output = output.at[:,0,(i%sqrtchannels) * input.shape[2]:(i%sqrtchannels + 1) * input.shape[2],(i//sqrtchannels) * input.shape[3]:(i//sqrtchannels + 1) * input.shape[3]].set(input[:,i,:,:])    
+    output = apply_forward_small_scale(output, small_block_params, parity, step)
     parity = (parity + 1)%2
+    input = jnp.zeros((output.shape[0], channel_size, output.shape[2]//sqrtchannels, output.shape[3]//sqrtchannels))
+    for i in range(channel_size):
+      input = input.at[:,i,:,:].set(output[:,0,(i%sqrtchannels) * input.shape[2]:(i%sqrtchannels + 1) * input.shape[2],(i//sqrtchannels) * input.shape[3]:(i//sqrtchannels + 1) * input.shape[3]])
   # Apply a function which squeezes the first input channel to [0,1] to obtain an image.
   output = squeeze_function(output)
   return output
@@ -243,27 +240,28 @@ def apply_forward(input, parameters):
 #@jit
 def apply_backward(input, parameters):
   input = input.at[:,0,:,:].apply(squeeze_inverse)
-  parity = (len(parameters[1])+1)%2
-  for block_params in reversed(parameters[1]):
-    input = apply_backward_small_scale(input, block_params, parity, step)
+  parity = (len(parameters)+1)%2
+  for block_params, permutation, small_block_params in reversed(parameters):
+    input = apply_backward_small_scale(input, small_block_params, parity, step)
     parity = (parity + 1)%2
-  output = jnp.zeros((input.shape[0], channel_size, input.shape[2]//sqrtchannels, input.shape[3]//sqrtchannels))
-  for i in range(channel_size):
-    output = output.at[:,i,:,:].set(input[:,0,(i%sqrtchannels) * output.shape[2]:(i%sqrtchannels + 1) * output.shape[2],(i//sqrtchannels) * output.shape[3]:(i//sqrtchannels + 1) * output.shape[3]])
-  for block_params, permutation in reversed(parameters[0]):
+    output = jnp.zeros((input.shape[0], channel_size, input.shape[2]//sqrtchannels, input.shape[3]//sqrtchannels))
+    for i in range(channel_size):
+      output = output.at[:,i,:,:].set(input[:,0,(i%sqrtchannels) * output.shape[2]:(i%sqrtchannels + 1) * output.shape[2],(i//sqrtchannels) * output.shape[3]:(i//sqrtchannels + 1) * output.shape[3]])
     m = len(permutation)
     output = apply_block_backward(output, block_params, permutation[:m//2], permutation[m//2:], step)
+    input = jnp.zeros((output.shape[0], 1, sqrtchannels * output.shape[2], sqrtchannels * output.shape[3]))
+    for i in range(channel_size):
+      input = input.at[:,0,(i%sqrtchannels) * output.shape[2]:(i%sqrtchannels + 1) * output.shape[2],(i//sqrtchannels) * output.shape[3]:(i//sqrtchannels + 1) * output.shape[3]].set(output[:,i,:,:])
   return output
 
 if __name__ == '__main__':
   inner_channels = 32
   kernel_size = 5
   inner_depth = 4
-  layers = 8
-  small_scale_inner_channels = 16
+  small_scale_inner_channels = 8
   small_scale_kernel_size = 5
   small_scale_inner_depth = 4
-  small_scale_layers = 4
+  layers = 6
 
   parameters = None
   if os.path.isfile(save_name):
@@ -272,15 +270,15 @@ if __name__ == '__main__':
       parameters = pickle.load(f)
       f.close()
     else:
-      parameters = generate_parameters(channel_size // 2, inner_channels, inner_depth, kernel_size, layers, 
+      parameters = generate_parameters(channel_size // 2, inner_channels, inner_depth, kernel_size, 
                 small_scale_inner_channels, small_scale_inner_depth, 
-                small_scale_kernel_size, small_scale_layers, random.PRNGKey(0))
+                small_scale_kernel_size, layers, random.PRNGKey(0))
 
   if parameters == None:
     print('No saved models found. Generating random initial parameters.')
-    parameters = generate_parameters(channel_size // 2, inner_channels, inner_depth, kernel_size, layers, 
+    parameters = generate_parameters(channel_size // 2, inner_channels, inner_depth, kernel_size, 
                 small_scale_inner_channels, small_scale_inner_depth, 
-                small_scale_kernel_size, small_scale_layers, random.PRNGKey(0))
+                small_scale_kernel_size, layers, random.PRNGKey(0))
 
 
   if input('Test numerical invertibility (yes/no): ') == 'yes':
@@ -336,11 +334,11 @@ if __name__ == '__main__':
       velocity, params = update(params, step_images, step_size, momentum, velocity)
     return params
 
-  num_steps = 5000
+  num_steps = 500
   batch_size = 10
   step_size = 0.000001
   momentum = 0.8
-  noise_level = 0.03
+  noise_level = 0.01
 
   if input('Train model (yes/no): ') == 'yes':
     parameters = train(parameters, train_images, num_steps, batch_size, step_size, momentum, noise_level, random.PRNGKey(1))

@@ -45,8 +45,13 @@ if __name__ == '__main__':
   test_images = jnp.moveaxis(test_images * (1.0/256), -1, 1)
   test_labels = one_hot(test_labels, num_labels)
 
+
   # Show one of the images
   pyplot.imshow(test_images[0,0,:,:])
+  pyplot.show()
+
+  # Show one of the images
+  pyplot.imshow(test_images[1,0,:,:])
   pyplot.show()
 
 # A helper function to randomly initialize weights and biases
