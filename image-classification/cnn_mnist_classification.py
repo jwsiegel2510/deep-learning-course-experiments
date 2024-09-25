@@ -120,7 +120,7 @@ def batched_predict(params, images):
 # batched_predict = vmap(predict, in_axes=(None, 0))
 
 if __name__ == '__main__':
-  params = init_network_params([[1,5],[5,20],[20,50]], [800,200,10], random.PRNGKey(0))
+  params = init_network_params([[1,5,10],[10,20,30]], [1470,200,10], random.PRNGKey(0))
 
 from jax import grad
 
@@ -155,13 +155,15 @@ if __name__ == '__main__':
     velocity = None
     for i in range(num_steps):
       print('Step : ', i)
+      if i == 5000:
+        step_size = step_size / 5
       inds = random.choice(keys[i], train_images.shape[0], [batch_size])
       step_images = train_images[inds,:,:,:]
       step_labels = train_labels[inds,:,]
       velocity, params = update(params, step_images, step_labels, step_size, momentum, velocity)
     return params
 
-  num_steps = 4000
+  num_steps = 10000
   batch_size = 50
   step_size = 0.04
   momentum = 0.8
